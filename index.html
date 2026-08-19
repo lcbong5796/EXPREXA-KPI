@@ -2316,6 +2316,19 @@
     }
   }
 
+  async function approveTeamSubmission(submissionId, awards){
+    const [targets,ledger]=await Promise.all([getTargets(),getLedger()]);
+    const approved=[];
+    awards.forEach(award=>{
+      const t=targets.find(x=>x.id===award.targetId); if(!t) return;
+      const points=Math.max(0,Number(award.points)||0);
+      t.status='achieved'; t.achievedAt=todayStr();
+      ledger.push({id:uid(),workerId:t.workerId,type:'earned',points,note:t.title,date:todayStr(),targetId:t.id,jobId:t.jobId||null,submissionId});
+      approved.push({targetId:t.id,workerId:t.workerId,points});
+    });
+    await Promise.all([setList(K_TARGETS,targets),setList(K_LEDGER,ledger),updateSub(submissionId,{status:'approved',approvedAwards:approved,reviewedAt:new Date().toISOString()}),addAuditLog({event:'TEAM_POINTS_APPROVED',detail:`${approved.length} employee award(s) approved from one team proof`})]);
+  }
+
   // ---- Review ----
   async function renderReview(){
     const el = document.getElementById('view-review');
@@ -2332,18 +2345,21 @@
     el.innerHTML = `<div class="eyebrow" style="margin-bottom:10px;">${pending.length} awaiting review</div><div id="rv-list"></div>`;
     const listEl = document.getElementById('rv-list');
     listEl.innerHTML = pending.map(s=>{
-      const w = workerMap[s.workerId]; const t = targetMap[s.targetId];
+      const awards=(s.teamAwards&&s.teamAwards.length?s.teamAwards:[{targetId:s.targetId,workerId:s.workerId,points:(targetMap[s.targetId]||{}).points||0}]).filter(a=>a.targetId);
+      const firstTarget=targetMap[awards[0]?.targetId];
       return `
         <div class="sub-card">
           <div class="sub-top">
-            <div><div class="sub-title">${t?escapeHtml(t.title):'—'}</div>
-            <div class="sub-meta">${w?escapeHtml(w.name):'—'} &middot; ${new Date(s.submittedAt).toLocaleString()}</div></div>
-            <div class="target-pts">+${t?t.points:0} pts</div>
+            <div><div class="sub-title">${s.jobRef?'MAWB '+escapeHtml(s.jobRef):firstTarget?escapeHtml(firstTarget.title):'—'}</div>
+            <div class="sub-meta">One shared team proof &middot; ${new Date(s.submittedAt).toLocaleString()}</div></div>
+            <div class="target-pts">${awards.length} member${awards.length===1?'':'s'}</div>
           </div>
           ${s.photo ? `<img class="sub-photo" src="${s.photo}" data-lightbox="${s.photo}">` : `<div class="sub-note" style="color:var(--muted);">No photo required for this task.</div>`}
           ${s.note ? `<div class="sub-note">${escapeHtml(s.note)}</div>` : ''}
+          <div class="eyebrow" style="margin:10px 0 6px;">Confirm participating employees and points</div>
+          ${awards.map(a=>{const w=workerMap[a.workerId],t=targetMap[a.targetId];return `<label class="worker-check-item" style="border:1px solid var(--line);margin-bottom:5px;"><input type="checkbox" data-team-member="${s.id}" data-target-id="${a.targetId}" data-worker-id="${a.workerId}" checked><span class="wc-name">${w?escapeHtml(w.name):'Unknown employee'}<small style="display:block;color:var(--muted);">${t?escapeHtml(t.title):''}</small></span><input type="number" data-team-points="${s.id}-${a.targetId}" value="${Number(a.points)||0}" min="0" style="width:68px;padding:6px;border:1px solid var(--line);border-radius:6px;"> <span class="wc-role">pts</span></label>`;}).join('')}
           <div class="sub-actions">
-            <button class="btn btn-green btn-sm" data-approve="${s.id}" data-target="${s.targetId}">Approve</button>
+            <button class="btn btn-green btn-sm" data-team-approve="${s.id}">Approve selected points</button>
             <button class="btn btn-red btn-sm" data-reject="${s.id}">Reject</button>
           </div>
         </div>`;
@@ -2352,10 +2368,12 @@
     listEl.querySelectorAll('[data-lightbox]').forEach(img=>{
       img.onclick = ()=> openLightbox(img.dataset.lightbox);
     });
-    listEl.querySelectorAll('[data-approve]').forEach(btn=>{
+    listEl.querySelectorAll('[data-team-approve]').forEach(btn=>{
       btn.onclick = async ()=>{
+        const awards=[...listEl.querySelectorAll(`[data-team-member="${btn.dataset.teamApprove}"]:checked`)].map(x=>({targetId:x.dataset.targetId,workerId:x.dataset.workerId,points:Number(listEl.querySelector(`[data-team-points="${btn.dataset.teamApprove}-${x.dataset.targetId}"]`).value)||0}));
+        if(!awards.length){ alert('Select at least one participating employee before approval.'); return; }
         btn.disabled = true; btn.textContent = 'Approving…';
-        await approveTarget(btn.dataset.target, btn.dataset.approve);
+        await approveTeamSubmission(btn.dataset.teamApprove,awards);
         renderReview(); updateReviewDot();
       };
     });
@@ -2394,6 +2412,10 @@
     const tbody = document.getElementById('log-tbody');
     tbody.innerHTML = sorted.map(s=>{
       const w = workerMap[s.workerId]; const t = targetMap[s.targetId];
+      const teamAwards=s.teamAwards||s.approvedAwards||[];
+      const teamNames=teamAwards.map(a=>workerMap[a.workerId]?.name).filter(Boolean);
+      const taskLabel=s.jobRef?`MAWB ${s.jobRef}`:(t?t.title:'—');
+      const workerLabel=teamNames.length?teamNames.join(', '):(w?w.name:'—');
       const dt = new Date(s.submittedAt);
       const photoCell = s.photo
         ? `<img class="log-table-thumb" src="${s.photo}" data-lightbox="${s.photo}">`
@@ -2401,8 +2423,8 @@
       return `
         <tr>
           <td>${photoCell}</td>
-          <td>${t?escapeHtml(t.title):'—'}</td>
-          <td>${w?escapeHtml(w.name):'—'}</td>
+          <td>${escapeHtml(taskLabel)}</td>
+          <td>${escapeHtml(workerLabel)}</td>
           <td class="mono">${todayStrFromDate(dt)}</td>
           <td class="mono">${dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
           <td><span class="badge ${badgeClass[s.status]||''}">${s.status}</span></td>
@@ -3040,13 +3062,13 @@
           if(!missions.length){ btn.disabled=false; btn.textContent='Update'; msg.style.color='var(--red)'; msg.textContent='No active MAWB mission is linked to this status. Reopen the job or assign a handler first.'; return; }
           const proofBatchId=uid();
           const submittedAt=new Date().toISOString();
-          const proofIds=missions.map((mission,index)=>`${proofBatchId}-${index+1}`);
-          const results=await Promise.all(missions.map((mission,index)=>addSub({id:proofIds[index],proofBatchId,targetId:mission.id,jobId:job.id,jobRef:job.ref,workerId:mission.workerId,photo,note:`Status proof: ${oldStage} → ${newStage}`,type:'status-proof',status:'pending',submittedAt,reviewedAt:null})));
-          if(!results.every(Boolean)){ btn.disabled=false; btn.textContent='Update'; msg.style.color='var(--red)'; msg.textContent='Could not submit every handler proof for review. Status was not changed.'; return; }
+          const teamAwards=missions.map(mission=>({targetId:mission.id,workerId:mission.workerId,points:mission.points}));
+          const ok=await addSub({id:proofBatchId,proofBatchId,targetIds:missions.map(m=>m.id),workerIds:missions.map(m=>m.workerId),teamAwards,jobId:job.id,jobRef:job.ref,photo,note:`Team status proof: ${oldStage} → ${newStage}`,type:'status-proof',status:'pending',submittedAt,reviewedAt:null});
+          if(!ok){ btn.disabled=false; btn.textContent='Update'; msg.style.color='var(--red)'; msg.textContent='Could not submit the team proof for review. Status was not changed.'; return; }
           job.lastStatusProofId=proofBatchId; job.lastStatusProofAt=submittedAt;
           job.statusHistory=job.statusHistory||[];
-          job.statusHistory.push({from:oldStage,to:newStage,proofBatchId,proofIds,reviewStatus:'pending',changedAt:job.lastStatusProofAt});
-          await addAuditLog({event:'KPI_REVIEW_SUBMITTED',jobId:job.id,jobRef:job.ref,detail:`${oldStage} → ${newStage}; ${missions.length} handler mission(s) pending approval`});
+          job.statusHistory.push({from:oldStage,to:newStage,proofBatchId,teamSize:missions.length,reviewStatus:'pending',changedAt:job.lastStatusProofAt});
+          await addAuditLog({event:'KPI_REVIEW_SUBMITTED',jobId:job.id,jobRef:job.ref,detail:`${oldStage} → ${newStage}; one team proof for ${missions.length} handler(s) pending approval`});
           liveProofPhotos.delete(job.id);
         }
         job.stage=newStage;
