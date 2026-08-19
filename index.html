@@ -2903,8 +2903,8 @@
       const handlerIds=[...new Set((job.handlerIds&&job.handlerIds.length?job.handlerIds:[job.ownerId]).filter(Boolean))];
       const title=`MAWB ${job.ref} — ${job.stage}`;
       handlerIds.forEach(workerId=>{
-        let mission=list.find(t=>t.jobId===job.id&&t.workerId===workerId&&t.status==='active');
-        if(mission){ mission.title=title; mission.points=pointsForJob(job); mission.stage=job.stage; }
+        let mission=list.find(t=>t.jobId===job.id&&t.workerId===workerId&&t.stage===job.stage&&t.status==='active');
+        if(mission){ mission.title=title; mission.points=pointsForJob(job); }
         else if(!list.some(t=>t.jobId===job.id&&t.workerId===workerId&&t.stage===job.stage)) list.push({id:uid(),workerId,title,points:pointsForJob(job),period:'MAWB Mission',status:'active',createdAt:todayStr(),jobId:job.id,jobRef:job.ref,stage:job.stage,requiresPhoto:true});
       });
     };
@@ -3016,21 +3016,29 @@
         }
         btn.disabled=true; btn.textContent=statusChanged?'Saving proof…':'Updating…';
         const oldStage=job.stage;
+        const allTargets=await getTargets();
         if(statusChanged){
           const photo=liveProofPhotos.get(job.id);
-          const proofId=uid();
-          const ok=await addSub({id:proofId,targetId:null,jobId:job.id,jobRef:job.ref,workerId:job.ownerId||'',photo,note:`Status proof: ${oldStage} → ${newStage}`,type:'status-proof',status:'approved',submittedAt:new Date().toISOString(),reviewedAt:new Date().toISOString()});
-          if(!ok){ btn.disabled=false; btn.textContent='Update'; msg.style.color='var(--red)'; msg.textContent='Could not save proof photo. Status was not changed.'; return; }
-          job.lastStatusProofId=proofId; job.lastStatusProofAt=new Date().toISOString();
+          const handlerIds=[...new Set((job.handlerIds&&job.handlerIds.length?job.handlerIds:[job.ownerId]).filter(Boolean))];
+          const missions=handlerIds.map(workerId=>allTargets.find(t=>t.jobId===job.id&&t.workerId===workerId&&t.stage===oldStage&&t.status==='active')).filter(Boolean);
+          if(!missions.length){ btn.disabled=false; btn.textContent='Update'; msg.style.color='var(--red)'; msg.textContent='No active MAWB mission is linked to this status. Reopen the job or assign a handler first.'; return; }
+          const proofBatchId=uid();
+          const submittedAt=new Date().toISOString();
+          const proofIds=missions.map((mission,index)=>`${proofBatchId}-${index+1}`);
+          const results=await Promise.all(missions.map((mission,index)=>addSub({id:proofIds[index],proofBatchId,targetId:mission.id,jobId:job.id,jobRef:job.ref,workerId:mission.workerId,photo,note:`Status proof: ${oldStage} → ${newStage}`,type:'status-proof',status:'pending',submittedAt,reviewedAt:null})));
+          if(!results.every(Boolean)){ btn.disabled=false; btn.textContent='Update'; msg.style.color='var(--red)'; msg.textContent='Could not submit every handler proof for review. Status was not changed.'; return; }
+          job.lastStatusProofId=proofBatchId; job.lastStatusProofAt=submittedAt;
           job.statusHistory=job.statusHistory||[];
-          job.statusHistory.push({from:oldStage,to:newStage,proofId,changedAt:job.lastStatusProofAt});
+          job.statusHistory.push({from:oldStage,to:newStage,proofBatchId,proofIds,reviewStatus:'pending',changedAt:job.lastStatusProofAt});
+          await addAuditLog({event:'KPI_REVIEW_SUBMITTED',jobId:job.id,jobRef:job.ref,detail:`${oldStage} → ${newStage}; ${missions.length} handler mission(s) pending approval`});
           liveProofPhotos.delete(job.id);
         }
         job.stage=newStage;
         job.risk=newRisk;
         job.updatedAt=new Date().toISOString();
-        const allTargets=await getTargets(); ensureJobMissions(job,allTargets);
-        await Promise.all([setList(K_JOBS,all),setList(K_TARGETS,allTargets),addAuditLog({event:statusChanged?'STATUS_CHANGED':'RISK_UPDATED',jobId:job.id,jobRef:job.ref,detail:statusChanged?`${oldStage} → ${newStage}`:`Risk ${job.risk}`})]); renderControlTower();
+        ensureJobMissions(job,allTargets);
+        await Promise.all([setList(K_JOBS,all),setList(K_TARGETS,allTargets),addAuditLog({event:statusChanged?'STATUS_CHANGED':'RISK_UPDATED',jobId:job.id,jobRef:job.ref,detail:statusChanged?`${oldStage} → ${newStage}; points pending admin review`:`Risk ${job.risk}`})]);
+        updateReviewDot(); renderControlTower();
       };
     });
     document.querySelectorAll('[data-ct-filter]').forEach(btn=>{
