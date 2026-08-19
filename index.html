@@ -1014,7 +1014,6 @@
   // =========================================================
   async function renderWorkerPortal(){
     const params = parseHash();
-    await clearTrialJobsOnce();
     await generateDailyTargets();
     root.innerHTML = `
       <div class="worker-shell">
@@ -1538,6 +1537,7 @@
       return;
     }
 
+    await clearTrialJobsOnce();
     await generateDailyTargets();
     root.innerHTML = `
       <div class="app">
