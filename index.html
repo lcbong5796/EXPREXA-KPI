@@ -479,6 +479,24 @@
       return false;
     }
   }
+  async function deleteSub(id){
+    try{ await db.collection(SUBS_COLLECTION).doc(id).delete(); return true; }
+    catch(e){ showFbError('Could not delete proof: ' + e.message); return false; }
+  }
+
+  // Requested reset: remove the trial MAWB records once, including their
+  // linked missions and proofs, while preserving employees and unrelated KPI data.
+  async function clearTrialJobsOnce(){
+    const resetDoc=db.collection('appdata').doc('exprexa-live-jobs-reset-20260819');
+    try{
+      const done=await resetDoc.get(); if(done.exists) return;
+      const [jobs,targets,subs]=await Promise.all([getJobs(),getTargets(),getSubs()]);
+      const jobIds=new Set(jobs.map(j=>j.id));
+      await Promise.all(subs.filter(s=>jobIds.has(s.jobId)).map(s=>deleteSub(s.id)));
+      await Promise.all([setList(K_JOBS,[]),setList(K_TARGETS,targets.filter(t=>!jobIds.has(t.jobId))),resetDoc.set({completed:true,at:new Date().toISOString(),deletedJobs:jobs.length})]);
+      await addAuditLog({event:'TRIAL_JOBS_CLEARED',detail:`${jobs.length} trial live job(s) removed`});
+    }catch(e){ console.error('Trial job reset failed:',e); }
+  }
 
   async function getWorkers(){ return getList(K_WORKERS); }
   async function getTargets(){ return getList(K_TARGETS); }
@@ -996,6 +1014,7 @@
   // =========================================================
   async function renderWorkerPortal(){
     const params = parseHash();
+    await clearTrialJobsOnce();
     await generateDailyTargets();
     root.innerHTML = `
       <div class="worker-shell">
@@ -1527,8 +1546,7 @@
           <div class="subline">Operations &middot; People &middot; Profit &middot; Rewards</div>
         </div>
         <div class="tabs">
-          <div class="tab active" data-view="dashboard">Dashboard</div>
-          <div class="tab" data-view="controltower">Control Tower</div>
+          <div class="tab active" data-view="controltower">Control Tower</div>
           <div class="tab" data-view="leaderboard">Leaderboard</div>
           <div class="tab" data-view="workers">Workers</div>
           <div class="tab" data-view="targets">Targets</div>
@@ -1540,8 +1558,7 @@
           <div class="tab" data-view="kpirules">KPI Rules</div>
         </div>
         <div class="content">
-          <div class="view active" id="view-dashboard"></div>
-          <div class="view" id="view-controltower"></div>
+          <div class="view active" id="view-controltower"></div>
           <div class="view" id="view-leaderboard"></div>
           <div class="view" id="view-workers"></div>
           <div class="view" id="view-targets"></div>
@@ -1564,12 +1581,11 @@
         renderView(t.dataset.view);
       };
     });
-    await renderDashboard();
+    await renderControlTower();
     await updateReviewDot();
   }
 
   function renderView(name){
-    if(name==='dashboard') renderDashboard();
     if(name==='controltower') renderControlTower();
     if(name==='leaderboard') renderLeaderboard();
     if(name==='workers') renderWorkers();
@@ -2899,6 +2915,7 @@
     });
     const defaultDeadline = todayStr() + 'T23:59';
     const missionForJob = jobId => targets.filter(t=>t.jobId===jobId).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0];
+    let editingJobId=null;
     const ensureJobMissions = (job, list) => {
       const handlerIds=[...new Set((job.handlerIds&&job.handlerIds.length?job.handlerIds:[job.ownerId]).filter(Boolean))];
       const title=`MAWB ${job.ref} — ${job.stage}`;
@@ -2990,6 +3007,7 @@
             <button class="btn btn-primary btn-sm" data-ct-save="${j.id}" style="width:auto;padding:7px 10px;">Update</button>
           </div>
           <div data-ct-update-msg="${j.id}" style="font-size:10.5px;margin-top:5px;color:var(--muted);">Photo required only when changing process status.</div>
+          <div style="display:flex;gap:6px;margin-top:7px;"><button type="button" class="btn btn-ghost btn-sm" data-ct-edit="${j.id}" style="flex:1;">Edit job details</button><button type="button" class="btn btn-red btn-sm" data-ct-delete="${j.id}" style="flex:1;">Delete job</button></div>
         </div>`;
       }).join('') : '<div class="card"><div class="empty">No MAWB/jobs recorded yet.</div></div>'}</div>`;
 
@@ -3003,8 +3021,16 @@
       const handlerNames=handlerIds.map(id=>(workers.find(w=>w.id===id)||{}).name).filter(Boolean);
       const msg=document.getElementById('ct-msg');
       if(!ref || !owner){ msg.style.color='var(--red)'; msg.textContent='MAWB/job reference and accountable owner are required.'; return; }
-      if(jobs.some(j=>j.ref.toLowerCase()===ref.toLowerCase() && j.stage!=='Cancelled')){ msg.style.color='var(--red)'; msg.textContent='This active MAWB/job reference already exists.'; return; }
-      this.disabled=true; this.textContent='Creating…';
+      if(jobs.some(j=>j.id!==editingJobId&&j.ref.toLowerCase()===ref.toLowerCase() && j.stage!=='Cancelled')){ msg.style.color='var(--red)'; msg.textContent='This active MAWB/job reference already exists.'; return; }
+      this.disabled=true; this.textContent=editingJobId?'Saving…':'Creating…';
+      if(editingJobId){
+        const job=jobs.find(j=>j.id===editingJobId); if(!job) return;
+        Object.assign(job,{ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,orderDate:document.getElementById('ct-order-date').value||todayStr(),ownerId,owner,ownerRole:ownerWorker?ownerWorker.role:'',handlerIds,handlerNames,deadline:document.getElementById('ct-deadline').value||defaultDeadline,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),basePoints:Number(document.getElementById('ct-base-points').value)||20,difficultyMultiplier:Number(document.getElementById('ct-difficulty').value)||1,completionBonus:Number(document.getElementById('ct-completion-bonus').value)||0,sameDayBonus:Number(document.getElementById('ct-sameday-bonus').value)||0,updatedAt:new Date().toISOString()});
+        const revisedTargets=targets.filter(t=>!(t.jobId===job.id&&t.status==='active'&&t.stage===job.stage&&!handlerIds.includes(t.workerId)));
+        ensureJobMissions(job,revisedTargets);
+        await Promise.all([setList(K_JOBS,jobs),setList(K_TARGETS,revisedTargets),addAuditLog({event:'MAWB_EDITED',jobId:job.id,jobRef:ref,detail:`Handlers ${handlerNames.join(', ')}`})]);
+        renderControlTower(); return;
+      }
       const job={id:uid(),ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,stage:document.getElementById('ct-stage').value,orderDate:document.getElementById('ct-order-date').value||todayStr(),ownerId,owner,ownerRole:ownerWorker?ownerWorker.role:'',handlerIds,handlerNames,deadline:document.getElementById('ct-deadline').value||defaultDeadline,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),basePoints:Number(document.getElementById('ct-base-points').value)||20,difficultyMultiplier:Number(document.getElementById('ct-difficulty').value)||1,completionBonus:Number(document.getElementById('ct-completion-bonus').value)||0,sameDayBonus:Number(document.getElementById('ct-sameday-bonus').value)||0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
       jobs.push(job); ensureJobMissions(job,targets);
       await Promise.all([setList(K_JOBS,jobs),setList(K_TARGETS,targets),addAuditLog({event:'MAWB_CREATED',jobId:job.id,jobRef:ref,detail:`Stage ${job.stage}; handlers ${handlerNames.join(', ')}`})]); renderControlTower();
@@ -3054,6 +3080,19 @@
         document.querySelectorAll('.ct-stage-header').forEach(header=>{ header.style.display=filter==='all'||header.dataset.ctStageHeader===filter?'block':'none'; });
       };
     });
+    document.querySelectorAll('[data-ct-edit]').forEach(btn=>{ btn.onclick=()=>{
+      const job=jobs.find(j=>j.id===btn.dataset.ctEdit); if(!job) return; editingJobId=job.id;
+      document.getElementById('ct-ref').value=job.ref||''; document.getElementById('ct-customer').value=job.customer||''; document.getElementById('ct-service').value=job.service||'Airport Import'; document.getElementById('ct-stage').value=job.stage; document.getElementById('ct-stage').disabled=true; document.getElementById('ct-order-date').value=job.orderDate||todayStr(); document.getElementById('ct-deadline').value=job.deadline||defaultDeadline; document.getElementById('ct-owner').value=job.ownerId||''; document.getElementById('ct-risk').value=job.risk||'Green'; document.getElementById('ct-delay').value=job.delayType||'None'; document.getElementById('ct-action').value=job.action||''; document.getElementById('ct-base-points').value=job.basePoints||20; document.getElementById('ct-difficulty').value=job.difficultyMultiplier||1; document.getElementById('ct-completion-bonus').value=job.completionBonus||0; document.getElementById('ct-sameday-bonus').value=job.sameDayBonus||0;
+      const selected=new Set(job.handlerIds||[job.ownerId]); document.querySelectorAll('input[name="ct-handler"]').forEach(x=>x.checked=selected.has(x.value));
+      document.getElementById('ct-add').textContent='Save job changes'; const msg=document.getElementById('ct-msg'); msg.style.color='var(--amber-dark)'; msg.textContent='Editing '+job.ref+'. Process status remains controlled below with live-photo proof.'; document.querySelector('.card h3').scrollIntoView({behavior:'smooth'});
+    }; });
+    document.querySelectorAll('[data-ct-delete]').forEach(btn=>{ btn.onclick=async()=>{
+      const job=jobs.find(j=>j.id===btn.dataset.ctDelete); if(!job||!confirm(`Delete ${job.ref}? Linked MAWB missions and proof records will also be removed. This cannot be undone.`)) return;
+      btn.disabled=true; btn.textContent='Deleting…'; const [allJobs,allTargets,allSubs]=await Promise.all([getJobs(),getTargets(),getSubs()]);
+      await Promise.all(allSubs.filter(s=>s.jobId===job.id).map(s=>deleteSub(s.id)));
+      await Promise.all([setList(K_JOBS,allJobs.filter(j=>j.id!==job.id)),setList(K_TARGETS,allTargets.filter(t=>t.jobId!==job.id)),addAuditLog({event:'MAWB_DELETED',jobId:job.id,jobRef:job.ref,detail:'Job, linked missions and proofs removed'})]);
+      updateReviewDot(); renderControlTower();
+    }; });
     document.querySelectorAll('[data-ct-camera]').forEach(btn=>{ btn.onclick=()=>openLiveCamera(btn.dataset.ctCamera); });
   }
 
