@@ -241,6 +241,11 @@
   .lightbox.open{display:flex;}
   .lightbox img{max-width:100%; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,0.5);}
   .lightbox-close{position:absolute; top:18px; right:20px; width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,0.12); color:#fff; border:none; font-size:20px; cursor:pointer; display:flex; align-items:center; justify-content:center;}
+  .camera-modal{position:fixed;inset:0;background:rgba(8,12,22,.94);display:none;align-items:center;justify-content:center;z-index:1100;padding:16px;}
+  .camera-modal.open{display:flex;}
+  .camera-panel{width:min(520px,100%);background:var(--ink);border-radius:14px;padding:14px;color:#fff;}
+  .camera-panel video{width:100%;max-height:65vh;background:#000;border-radius:10px;object-fit:cover;}
+  .camera-actions{display:flex;gap:8px;margin-top:10px;}
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
@@ -251,6 +256,15 @@
 <div class="lightbox" id="lightbox">
   <button class="lightbox-close" id="lightbox-close">&times;</button>
   <img id="lightbox-img" src="">
+</div>
+<div class="camera-modal" id="camera-modal">
+  <div class="camera-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><strong>Live proof camera</strong><button class="btn btn-ghost btn-sm" id="camera-cancel" style="color:#fff;">Cancel</button></div>
+    <video id="camera-video" autoplay playsinline muted></video>
+    <canvas id="camera-canvas" style="display:none;"></canvas>
+    <div class="camera-actions"><button class="btn btn-amber btn-block" id="camera-capture">Take live photo</button></div>
+    <div id="camera-msg" style="font-size:11px;color:#DCE2F0;margin-top:8px;">Camera permission is required. Gallery upload is disabled.</div>
+  </div>
 </div>
 
 <script>
@@ -268,6 +282,19 @@
 
 <script>
 (function(){
+
+  const AUDIT_COLLECTION = 'exprexa_audit_logs';
+  async function addAuditLog(entry){
+    try{
+      const id='a'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+      await db.collection(AUDIT_COLLECTION).doc(id).set({id,at:new Date().toISOString(),...entry});
+      return true;
+    }catch(e){ console.error('Audit log failed:',e); return false; }
+  }
+  async function getAuditLogs(){
+    try{ const snap=await db.collection(AUDIT_COLLECTION).get(); return snap.docs.map(d=>d.data()).sort((a,b)=>(b.at||'').localeCompare(a.at||'')); }
+    catch(e){ return []; }
+  }
 
   function uid(){ return 'p'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
   function pad(n){return n<10?'0'+n:''+n;}
@@ -362,6 +389,7 @@
   async function setList(key, val){
     try{
       await db.collection('appdata').doc(key).set({ value: val });
+      await addAuditLog({event:'DATA_WRITE',dataset:key,recordCount:Array.isArray(val)?val.length:null});
       return true;
     }catch(e){
       showFbError('Could not save to Firebase: ' + e.message);
@@ -1499,8 +1527,9 @@
           <div class="subline">Operations &middot; People &middot; Profit &middot; Rewards</div>
         </div>
         <div class="tabs">
+          <div class="tab active" data-view="dashboard">Dashboard</div>
           <div class="tab" data-view="controltower">Control Tower</div>
-          <div class="tab active" data-view="leaderboard">Leaderboard</div>
+          <div class="tab" data-view="leaderboard">Leaderboard</div>
           <div class="tab" data-view="workers">Workers</div>
           <div class="tab" data-view="targets">Targets</div>
           <div class="tab" data-view="sidequests">Side Quests</div>
@@ -1511,8 +1540,9 @@
           <div class="tab" data-view="kpirules">KPI Rules</div>
         </div>
         <div class="content">
+          <div class="view active" id="view-dashboard"></div>
           <div class="view" id="view-controltower"></div>
-          <div class="view active" id="view-leaderboard"></div>
+          <div class="view" id="view-leaderboard"></div>
           <div class="view" id="view-workers"></div>
           <div class="view" id="view-targets"></div>
           <div class="view" id="view-sidequests"></div>
@@ -1534,11 +1564,12 @@
         renderView(t.dataset.view);
       };
     });
-    await renderLeaderboard();
+    await renderDashboard();
     await updateReviewDot();
   }
 
   function renderView(name){
+    if(name==='dashboard') renderDashboard();
     if(name==='controltower') renderControlTower();
     if(name==='leaderboard') renderLeaderboard();
     if(name==='workers') renderWorkers();
@@ -2803,6 +2834,48 @@
     }).join('') + `</div>`;
   }
 
+  const liveProofPhotos=new Map();
+  let liveCameraStream=null, liveCameraJobId=null;
+  async function openLiveCamera(jobId){
+    const modal=document.getElementById('camera-modal'), video=document.getElementById('camera-video'), msg=document.getElementById('camera-msg');
+    liveCameraJobId=jobId; modal.classList.add('open'); msg.textContent='Starting live camera…';
+    try{ liveCameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false}); video.srcObject=liveCameraStream; msg.textContent='Position the cargo/document clearly, then take the photo.'; }
+    catch(e){ msg.textContent='Camera unavailable. Allow camera permission in browser settings and try again.'; }
+  }
+  function closeLiveCamera(){
+    if(liveCameraStream){ liveCameraStream.getTracks().forEach(t=>t.stop()); liveCameraStream=null; }
+    document.getElementById('camera-video').srcObject=null; document.getElementById('camera-modal').classList.remove('open'); liveCameraJobId=null;
+  }
+  document.getElementById('camera-cancel').onclick=closeLiveCamera;
+  document.getElementById('camera-capture').onclick=()=>{
+    const video=document.getElementById('camera-video'), canvas=document.getElementById('camera-canvas');
+    if(!liveCameraJobId||!video.videoWidth) return;
+    const max=1200, scale=Math.min(1,max/Math.max(video.videoWidth,video.videoHeight));
+    canvas.width=Math.round(video.videoWidth*scale); canvas.height=Math.round(video.videoHeight*scale);
+    canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
+    liveProofPhotos.set(liveCameraJobId,canvas.toDataURL('image/jpeg',.72));
+    const msg=document.querySelector(`[data-ct-update-msg="${liveCameraJobId}"]`); if(msg){msg.style.color='var(--green)';msg.textContent='✓ Live proof captured. You may update the status.';}
+    const btn=document.querySelector(`[data-ct-camera="${liveCameraJobId}"]`); if(btn) btn.textContent='✓ Retake';
+    closeLiveCamera();
+  };
+
+  // ---- EXprexa management dashboard ----
+  async function renderDashboard(){
+    const el=document.getElementById('view-dashboard');
+    const [jobs,workers,targets,subs,ledger,audits]=await Promise.all([getJobs(),getWorkers(),getTargets(),getSubs(),getLedger(),getAuditLogs()]);
+    const stages=['Pre-alert','Plan','Declare','Screen','Deliver','Short','Offload','Survey Report'];
+    const active=jobs.filter(j=>j.stage!=='Survey Report'&&j.stage!=='Cancelled');
+    const pendingReview=subs.filter(s=>s.status==='pending').length;
+    const risky=active.filter(j=>j.risk==='Red'||j.risk==='Black').length;
+    const external=active.filter(j=>j.delayType==='External').length;
+    const workload=workers.map(w=>({w,jobs:active.filter(j=>(j.handlerIds||[j.ownerId]).includes(w.id)).length,missions:targets.filter(t=>t.workerId===w.id&&t.status==='active').length,points:earnedFor(ledger,w.id)})).sort((a,b)=>b.jobs-a.jobs||b.points-a.points);
+    el.innerHTML=`<div class="toprow"><div><h2>Main Dashboard</h2><div class="help" style="margin:2px 0 0;">Whole-system operations, KPI and accountability view.</div></div></div>
+      <div class="stat-strip"><div class="stat"><div class="n">${active.length}</div><div class="l">Active MAWB</div></div><div class="stat"><div class="n" style="color:var(--red);">${risky}</div><div class="l">Red / Black</div></div><div class="stat"><div class="n">${external}</div><div class="l">External pending</div></div><div class="stat"><div class="n">${pendingReview}</div><div class="l">KPI review</div></div></div>
+      <div class="card"><h3>Process overview</h3><div style="display:flex;gap:6px;overflow-x:auto;">${stages.map((s,i)=>`<div style="min-width:82px;flex:1;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:8px;text-align:center;"><div style="font-size:10px;font-weight:700;">${i+1}. ${s}</div><div style="font:700 20px 'Space Grotesk';color:var(--amber-dark);">${jobs.filter(j=>j.stage===s).length}</div></div>`).join('')}</div></div>
+      <div class="card"><h3>Employee workload & ranking</h3>${workload.slice(0,20).map(x=>`<div class="ledger-row"><div><div class="ledger-note"><strong>${escapeHtml(x.w.name)}</strong> · ${escapeHtml(x.w.role||'No role')}</div><div class="ledger-date">${x.jobs} active MAWB · ${x.missions} active missions</div></div><div class="target-pts">${x.points} pts</div></div>`).join('')||'<div class="empty">No employees yet.</div>'}</div>
+      <div class="card"><h3>Recent system log</h3>${audits.slice(0,12).map(a=>`<div class="ledger-row"><div><div class="ledger-note">${escapeHtml(a.event||'DATA_WRITE')}${a.jobRef?' · '+escapeHtml(a.jobRef):''}</div><div class="ledger-date">${escapeHtml((a.at||'').replace('T',' ').slice(0,19))} · ${escapeHtml(a.detail||a.dataset||'System')}</div></div></div>`).join('')||'<div class="empty">No audit events yet.</div>'}</div>`;
+  }
+
   // ---- EXprexa operations control tower ----
   // The trial originally measured generic completed targets. This module adds
   // the logistics record that every future KPI should trace back to.
@@ -2826,14 +2899,14 @@
     });
     const defaultDeadline = todayStr() + 'T23:59';
     const missionForJob = jobId => targets.filter(t=>t.jobId===jobId).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0];
-    const ensureJobMission = (job, list) => {
-      if(!job.ownerId) return;
-      let mission=list.find(t=>t.jobId===job.id && t.status==='active');
+    const ensureJobMissions = (job, list) => {
+      const handlerIds=[...new Set((job.handlerIds&&job.handlerIds.length?job.handlerIds:[job.ownerId]).filter(Boolean))];
       const title=`MAWB ${job.ref} — ${job.stage}`;
-      if(mission){ mission.workerId=job.ownerId; mission.title=title; mission.points=stagePoints[job.stage]||10; mission.stage=job.stage; }
-      else if(!list.some(t=>t.jobId===job.id && t.stage===job.stage)){
-        list.push({id:uid(),workerId:job.ownerId,title,points:stagePoints[job.stage]||10,period:'MAWB Mission',status:'active',createdAt:todayStr(),jobId:job.id,jobRef:job.ref,stage:job.stage,requiresPhoto:true});
-      }
+      handlerIds.forEach(workerId=>{
+        let mission=list.find(t=>t.jobId===job.id&&t.workerId===workerId&&t.status==='active');
+        if(mission){ mission.title=title; mission.points=stagePoints[job.stage]||10; mission.stage=job.stage; }
+        else if(!list.some(t=>t.jobId===job.id&&t.workerId===workerId&&t.stage===job.stage)) list.push({id:uid(),workerId,title,points:stagePoints[job.stage]||10,period:'MAWB Mission',status:'active',createdAt:todayStr(),jobId:job.id,jobRef:job.ref,stage:job.stage,requiresPhoto:true});
+      });
     };
 
     el.innerHTML = `
@@ -2872,6 +2945,7 @@
           <div class="field"><label>Deadline</label><input type="datetime-local" id="ct-deadline" value="${defaultDeadline}"></div>
         </div>
         <div class="field"><label>Assigned employee / KPI owner</label><select id="ct-owner"><option value="">— Select employee —</option>${workers.map(w=>`<option value="${w.id}">${escapeHtml(w.name)} — ${escapeHtml(w.role||'No role')}</option>`).join('')}</select></div>
+        <div class="field"><label>MAWB team roster</label><div class="worker-check-list">${workers.map(w=>`<label class="worker-check-item"><input type="checkbox" name="ct-handler" value="${w.id}"><span class="wc-name">${escapeHtml(w.name)}</span><span class="wc-role">${escapeHtml(w.role||'No role')}</span></label>`).join('')||'<div class="worker-check-empty">Add employees under Workers first.</div>'}</div><div class="help">Every selected handler receives a MAWB KPI mission and enters the ranking after approved proof.</div></div>
         ${workers.length===0?'<div class="help" style="color:var(--red);">No employees found. Add the employee under Workers first, then return here to assign the MAWB mission.</div>':''}
         <div class="row2">
           <div class="field"><label>Risk</label><select id="ct-risk"><option>Green</option><option>Amber</option><option>Red</option><option>Black</option></select></div>
@@ -2896,7 +2970,7 @@
             <div style="display:flex;gap:5px;align-items:center;"><span class="badge badge-pending">${escapeHtml(j.stage)}</span><span style="width:9px;height:9px;border-radius:50%;background:${riskColor[j.risk]||'var(--line)'};" title="${escapeHtml(j.risk||'Green')} risk"></span></div>
           </div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px;">
-            <span>📅 ${escapeHtml(j.orderDate||todayStrFromDate(new Date(j.createdAt||Date.now())))}</span><span>👤 ${escapeHtml(j.owner||'Unassigned')}</span><span>⏱ ${escapeHtml((j.deadline||'Not set').replace('T',' '))}</span><span>🎯 ${mission?escapeHtml(mission.status)+' '+mission.points+'pts':'Not linked'}</span>
+            <span>📅 ${escapeHtml(j.orderDate||todayStrFromDate(new Date(j.createdAt||Date.now())))}</span><span>👥 ${escapeHtml((j.handlerNames&&j.handlerNames.length?j.handlerNames:[j.owner||'Unassigned']).join(', '))}</span><span>⏱ ${escapeHtml((j.deadline||'Not set').replace('T',' '))}</span><span>🎯 ${mission?escapeHtml(mission.status)+' '+mission.points+'pts':'Not linked'}</span>
           </div>
           <details style="margin-top:6px;"><summary style="font-size:11px;color:var(--muted);cursor:pointer;">More details</summary>
             <div class="help" style="margin:6px 0 0;font-size:11px;"><strong>Attribution:</strong> ${escapeHtml(j.delayType||'None')} &middot; <strong>Next:</strong> ${escapeHtml(j.action||'No action recorded')}<br><strong>Contribution:</strong> ${money(margin)} &middot; <strong>Last proof:</strong> ${j.lastStatusProofAt?escapeHtml(j.lastStatusProofAt.replace('T',' ').slice(0,16)):'None'}</div>
@@ -2904,7 +2978,7 @@
           <div style="display:grid;grid-template-columns:minmax(105px,1fr) 82px minmax(125px,1.25fr) auto;gap:6px;align-items:center;margin-top:8px;">
             <select data-ct-stage="${j.id}" style="min-width:0;padding:6px;font-size:11px;border:1px solid var(--line);border-radius:7px;">${stages.map(s=>`<option ${s===j.stage?'selected':''}>${s}</option>`).join('')}</select>
             <select data-ct-risk="${j.id}" style="min-width:0;padding:6px;font-size:11px;border:1px solid var(--line);border-radius:7px;">${['Green','Amber','Red','Black'].map(s=>`<option ${s===j.risk?'selected':''}>${s}</option>`).join('')}</select>
-            <input type="file" accept="image/*" capture="environment" data-ct-proof="${j.id}" title="Proof photo required when changing status" style="min-width:0;width:100%;font-size:10px;">
+            <button type="button" class="btn btn-ghost btn-sm" data-ct-camera="${j.id}" style="padding:7px;font-size:10.5px;">📷 Take live photo</button>
             <button class="btn btn-primary btn-sm" data-ct-save="${j.id}" style="width:auto;padding:7px 10px;">Update</button>
           </div>
           <div data-ct-update-msg="${j.id}" style="font-size:10.5px;margin-top:5px;color:var(--muted);">Photo required only when changing process status.</div>
@@ -2916,41 +2990,44 @@
       const ownerId=document.getElementById('ct-owner').value;
       const ownerWorker=workers.find(w=>w.id===ownerId);
       const owner=ownerWorker?ownerWorker.name:'';
+      const checkedHandlerIds=[...document.querySelectorAll('input[name="ct-handler"]:checked')].map(x=>x.value);
+      const handlerIds=[...new Set([ownerId,...checkedHandlerIds].filter(Boolean))];
+      const handlerNames=handlerIds.map(id=>(workers.find(w=>w.id===id)||{}).name).filter(Boolean);
       const msg=document.getElementById('ct-msg');
       if(!ref || !owner){ msg.style.color='var(--red)'; msg.textContent='MAWB/job reference and accountable owner are required.'; return; }
       if(jobs.some(j=>j.ref.toLowerCase()===ref.toLowerCase() && j.stage!=='Cancelled')){ msg.style.color='var(--red)'; msg.textContent='This active MAWB/job reference already exists.'; return; }
       this.disabled=true; this.textContent='Creating…';
-      const job={id:uid(),ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,stage:document.getElementById('ct-stage').value,orderDate:document.getElementById('ct-order-date').value||todayStr(),ownerId,owner,ownerRole:ownerWorker?ownerWorker.role:'',deadline:document.getElementById('ct-deadline').value||defaultDeadline,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),revenue:Number(document.getElementById('ct-revenue').value)||0,directCost:Number(document.getElementById('ct-cost').value)||0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-      jobs.push(job); ensureJobMission(job,targets);
-      await Promise.all([setList(K_JOBS,jobs),setList(K_TARGETS,targets)]); renderControlTower();
+      const job={id:uid(),ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,stage:document.getElementById('ct-stage').value,orderDate:document.getElementById('ct-order-date').value||todayStr(),ownerId,owner,ownerRole:ownerWorker?ownerWorker.role:'',handlerIds,handlerNames,deadline:document.getElementById('ct-deadline').value||defaultDeadline,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),revenue:Number(document.getElementById('ct-revenue').value)||0,directCost:Number(document.getElementById('ct-cost').value)||0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+      jobs.push(job); ensureJobMissions(job,targets);
+      await Promise.all([setList(K_JOBS,jobs),setList(K_TARGETS,targets),addAuditLog({event:'MAWB_CREATED',jobId:job.id,jobRef:ref,detail:`Stage ${job.stage}; handlers ${handlerNames.join(', ')}`})]); renderControlTower();
     };
     document.querySelectorAll('[data-ct-save]').forEach(btn=>{
       btn.onclick=async()=>{
         const all=await getJobs(); const job=all.find(j=>j.id===btn.dataset.ctSave); if(!job) return;
         const newStage=document.querySelector(`[data-ct-stage="${job.id}"]`).value;
         const newRisk=document.querySelector(`[data-ct-risk="${job.id}"]`).value;
-        const proofInput=document.querySelector(`[data-ct-proof="${job.id}"]`);
         const msg=document.querySelector(`[data-ct-update-msg="${job.id}"]`);
         const statusChanged=newStage!==job.stage;
-        if(statusChanged && (!proofInput || !proofInput.files || !proofInput.files[0])){
-          msg.style.color='var(--red)'; msg.textContent='Upload a proof photo before changing status.'; proofInput.focus(); return;
+        if(statusChanged && !liveProofPhotos.has(job.id)){
+          msg.style.color='var(--red)'; msg.textContent='Take a live camera photo before changing status.'; return;
         }
         btn.disabled=true; btn.textContent=statusChanged?'Saving proof…':'Updating…';
         const oldStage=job.stage;
         if(statusChanged){
-          const photo=await compressImage(proofInput.files[0],1200,0.72);
+          const photo=liveProofPhotos.get(job.id);
           const proofId=uid();
           const ok=await addSub({id:proofId,targetId:null,jobId:job.id,jobRef:job.ref,workerId:job.ownerId||'',photo,note:`Status proof: ${oldStage} → ${newStage}`,type:'status-proof',status:'approved',submittedAt:new Date().toISOString(),reviewedAt:new Date().toISOString()});
           if(!ok){ btn.disabled=false; btn.textContent='Update'; msg.style.color='var(--red)'; msg.textContent='Could not save proof photo. Status was not changed.'; return; }
           job.lastStatusProofId=proofId; job.lastStatusProofAt=new Date().toISOString();
           job.statusHistory=job.statusHistory||[];
           job.statusHistory.push({from:oldStage,to:newStage,proofId,changedAt:job.lastStatusProofAt});
+          liveProofPhotos.delete(job.id);
         }
         job.stage=newStage;
         job.risk=newRisk;
         job.updatedAt=new Date().toISOString();
-        const allTargets=await getTargets(); ensureJobMission(job,allTargets);
-        await Promise.all([setList(K_JOBS,all),setList(K_TARGETS,allTargets)]); renderControlTower();
+        const allTargets=await getTargets(); ensureJobMissions(job,allTargets);
+        await Promise.all([setList(K_JOBS,all),setList(K_TARGETS,allTargets),addAuditLog({event:statusChanged?'STATUS_CHANGED':'RISK_UPDATED',jobId:job.id,jobRef:job.ref,detail:statusChanged?`${oldStage} → ${newStage}`:`Risk ${job.risk}`})]); renderControlTower();
       };
     });
     document.querySelectorAll('[data-ct-filter]').forEach(btn=>{
@@ -2961,6 +3038,7 @@
         document.querySelectorAll('.ct-stage-header').forEach(header=>{ header.style.display=filter==='all'||header.dataset.ctStageHeader===filter?'block':'none'; });
       };
     });
+    document.querySelectorAll('[data-ct-camera]').forEach(btn=>{ btn.onclick=()=>openLiveCamera(btn.dataset.ctCamera); });
   }
 
   function renderKpiRules(){
