@@ -1533,7 +1533,7 @@
           <div class="tab" data-view="workers">Workers</div>
           <div class="tab" data-view="targets">Targets</div>
           <div class="tab" data-view="sidequests">Side Quests</div>
-          <div class="tab" data-view="review">Review<span class="dot" id="review-dot" style="display:none;"></span></div>
+          <div class="tab" data-view="review">Points Approval<span class="dot" id="review-dot" style="display:none;"></span></div>
           <div class="tab" data-view="log">Log</div>
           <div class="tab" data-view="rewards">Rewards</div>
           <div class="tab" data-view="badges">Badges</div>
@@ -2325,7 +2325,7 @@
     const pending = subs.filter(s=>s.status==='pending').sort((a,b)=>a.submittedAt.localeCompare(b.submittedAt));
 
     if(pending.length===0){
-      el.innerHTML = `<div class="card"><div class="empty">No submissions awaiting review.<br>Photo proofs from workers will appear here.</div></div>`;
+      el.innerHTML = `<div class="card"><h3>Points Approval</h3><div class="empty">No points awaiting approval.<br><br>After a handler takes a live photo and updates an MAWB status, the proof will appear here as <strong>Pending Review</strong>. Points enter the employee ranking only after you approve it.</div></div>`;
       return;
     }
     el.innerHTML = `<div class="eyebrow" style="margin-bottom:10px;">${pending.length} awaiting review</div><div id="rv-list"></div>`;
@@ -2881,7 +2881,7 @@
   // the logistics record that every future KPI should trace back to.
   async function renderControlTower(){
     const el = document.getElementById('view-controltower');
-    const [jobs, workers, targets] = await Promise.all([getJobs(), getWorkers(), getTargets()]);
+    const [jobs, workers, targets, subs] = await Promise.all([getJobs(), getWorkers(), getTargets(), getSubs()]);
     const stages = ['Pre-alert','Plan','Declare','Screen','Deliver','Short','Offload','Survey Report','Cancelled'];
     const operationalStages = stages.filter(s=>s!=='Cancelled');
     const stagePoints = {'Pre-alert':10,Plan:10,Declare:20,Screen:20,Deliver:20,Short:15,Offload:15,'Survey Report':20};
@@ -2967,13 +2967,18 @@
       <div id="ct-list">${jobs.length ? sortedJobs.map((j,index)=>{
         const showStageHeader=index===0 || sortedJobs[index-1].stage!==j.stage;
         const mission=missionForJob(j.id);
+        const jobProofs=subs.filter(s=>s.jobId===j.id&&s.type==='status-proof');
+        const pendingApprovals=jobProofs.filter(s=>s.status==='pending').length;
+        const approvedProofs=jobProofs.filter(s=>s.status==='approved').length;
+        const approvalLabel=pendingApprovals?`${pendingApprovals} point approval${pendingApprovals===1?'':'s'} pending`:approvedProofs?'Latest proof approved':'No proof submitted';
+        const approvalClass=pendingApprovals?'badge-pending':approvedProofs?'badge-achieved':'badge-rejected';
         return `${showStageHeader?`<div class="eyebrow ct-stage-header" data-ct-stage-header="${escapeHtml(j.stage)}" style="margin:14px 2px 6px;">${(stageIndex[j.stage]??0)+1}. ${escapeHtml(j.stage)} &middot; ${jobs.filter(x=>x.stage===j.stage).length}</div>`:''}<div class="card ct-job-card" data-ct-job-stage="${escapeHtml(j.stage)}" style="margin-bottom:7px;padding:11px 12px;border-left:4px solid ${riskColor[j.risk]||'var(--line)'};">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
             <div style="min-width:0;"><div class="worker-name" style="font-size:14px;">${escapeHtml(j.ref)}</div><div class="worker-role" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:360px;">${escapeHtml(j.customer||'—')} &middot; ${escapeHtml(j.service||'—')}</div></div>
             <div style="display:flex;gap:5px;align-items:center;"><span class="badge badge-pending">${escapeHtml(j.stage)}</span><span style="width:9px;height:9px;border-radius:50%;background:${riskColor[j.risk]||'var(--line)'};" title="${escapeHtml(j.risk||'Green')} risk"></span></div>
           </div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px;">
-            <span>📅 ${escapeHtml(j.orderDate||todayStrFromDate(new Date(j.createdAt||Date.now())))}</span><span>👥 ${escapeHtml((j.handlerNames&&j.handlerNames.length?j.handlerNames:[j.owner||'Unassigned']).join(', '))}</span><span>⏱ ${escapeHtml((j.deadline||'Not set').replace('T',' '))}</span><span>🎯 ${mission?escapeHtml(mission.status)+' '+mission.points+'pts':'Not linked'}</span>
+            <span>📅 ${escapeHtml(j.orderDate||todayStrFromDate(new Date(j.createdAt||Date.now())))}</span><span>👥 ${escapeHtml((j.handlerNames&&j.handlerNames.length?j.handlerNames:[j.owner||'Unassigned']).join(', '))}</span><span>⏱ ${escapeHtml((j.deadline||'Not set').replace('T',' '))}</span><span>🎯 ${mission?escapeHtml(mission.status)+' '+mission.points+'pts':'Not linked'}</span><span class="badge ${approvalClass}">${escapeHtml(approvalLabel)}</span>
           </div>
           <details style="margin-top:6px;"><summary style="font-size:11px;color:var(--muted);cursor:pointer;">More details</summary>
             <div class="help" style="margin:6px 0 0;font-size:11px;"><strong>Attribution:</strong> ${escapeHtml(j.delayType||'None')} &middot; <strong>Next:</strong> ${escapeHtml(j.action||'No action recorded')}<br><strong>Mission value:</strong> ${pointsForJob(j)} pts per handler &middot; <strong>Last proof:</strong> ${j.lastStatusProofAt?escapeHtml(j.lastStatusProofAt.replace('T',' ').slice(0,16)):'None'}</div>
