@@ -2816,14 +2816,31 @@
     const money = n=>'RM '+Number(n||0).toLocaleString('en-MY',{minimumFractionDigits:2,maximumFractionDigits:2});
     const riskColor = {Green:'var(--green)',Amber:'var(--amber-dark)',Red:'var(--red)',Black:'var(--ink)'};
     const stages = ['Pre-alert','Plan','Declare','Screen','Pull-out','Deliver','Billed','Cancelled'];
+    const operationalStages = stages.filter(s=>s!=='Cancelled');
+    const stageIndex = Object.fromEntries(stages.map((s,i)=>[s,i]));
+    const sortedJobs = jobs.slice().sort((a,b)=>{
+      const stageDiff=(stageIndex[a.stage]??99)-(stageIndex[b.stage]??99);
+      if(stageDiff!==0) return stageDiff;
+      return (a.deadline||'9999').localeCompare(b.deadline||'9999') || (a.orderDate||'').localeCompare(b.orderDate||'');
+    });
+    const defaultDeadline = todayStr() + 'T23:59';
 
     el.innerHTML = `
       <div class="toprow"><div><h2>Shipment Control Tower</h2><div class="help" style="margin:2px 0 0;">One owner, deadline, exception and next action for every MAWB/job.</div></div></div>
-      <div class="stats">
+      <div class="stat-strip">
         <div class="stat"><div class="n">${active.length}</div><div class="l">Active jobs</div></div>
         <div class="stat"><div class="n" style="color:var(--red);">${critical.length}</div><div class="l">Red / black</div></div>
         <div class="stat"><div class="n">${external.length}</div><div class="l">External pending</div></div>
         <div class="stat"><div class="n" style="font-size:18px;">${money(contribution)}</div><div class="l">Recorded contribution</div></div>
+      </div>
+      <div class="card" style="padding:12px 14px;">
+        <div class="eyebrow">Process status</div>
+        <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;">
+          ${operationalStages.map((s,i)=>`<div style="min-width:86px;flex:1;padding:8px 7px;border-radius:8px;background:${jobs.some(j=>j.stage===s)?'#FFF6E8':'var(--paper)'};border:1px solid ${jobs.some(j=>j.stage===s)?'var(--amber)':'var(--line)'};text-align:center;">
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;">${i+1}. ${s}</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:16px;font-weight:700;color:var(--amber-dark);margin-top:3px;">${jobs.filter(j=>j.stage===s).length}</div>
+          </div>`).join('')}
+        </div>
       </div>
       <div class="card">
         <h3>Add MAWB / job</h3>
@@ -2836,9 +2853,10 @@
           <div class="field"><label>Current stage</label><select id="ct-stage">${stages.filter(x=>x!=='Cancelled').map(x=>`<option>${x}</option>`).join('')}</select></div>
         </div>
         <div class="row2">
-          <div class="field"><label>Accountable owner</label><input id="ct-owner" placeholder="Name / department"></div>
-          <div class="field"><label>Deadline</label><input type="datetime-local" id="ct-deadline"></div>
+          <div class="field"><label>Order date</label><input type="date" id="ct-order-date" value="${todayStr()}"></div>
+          <div class="field"><label>Deadline</label><input type="datetime-local" id="ct-deadline" value="${defaultDeadline}"></div>
         </div>
+        <div class="field"><label>Accountable owner</label><input id="ct-owner" placeholder="Name / department"></div>
         <div class="row2">
           <div class="field"><label>Risk</label><select id="ct-risk"><option>Green</option><option>Amber</option><option>Red</option><option>Black</option></select></div>
           <div class="field"><label>Delay attribution</label><select id="ct-delay"><option>None</option><option>Internal</option><option>External</option></select></div>
@@ -2852,11 +2870,13 @@
         <div id="ct-msg" style="margin-top:8px;font-size:12px;"></div>
       </div>
       <div class="toprow"><h2>Live jobs</h2></div>
-      <div id="ct-list">${jobs.length ? jobs.slice().sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||'')).map(j=>{
+      <div id="ct-list">${jobs.length ? sortedJobs.map((j,index)=>{
         const margin=(Number(j.revenue)||0)-(Number(j.directCost)||0);
-        return `<div class="card" style="margin-bottom:10px;border-left:5px solid ${riskColor[j.risk]||'var(--line)'};">
+        const showStageHeader=index===0 || sortedJobs[index-1].stage!==j.stage;
+        return `${showStageHeader?`<div class="eyebrow" style="margin:18px 2px 8px;">${(stageIndex[j.stage]??0)+1}. ${escapeHtml(j.stage)} &middot; ${jobs.filter(x=>x.stage===j.stage).length} job(s)</div>`:''}<div class="card" style="margin-bottom:10px;border-left:5px solid ${riskColor[j.risk]||'var(--line)'};">
           <div class="worker-head"><div><div class="worker-name">${escapeHtml(j.ref)}</div><div class="worker-role">${escapeHtml(j.customer||'—')} &middot; ${escapeHtml(j.service||'—')}</div></div><div class="target-pts">${escapeHtml(j.stage)}</div></div>
-          <div class="help" style="margin:8px 0 0;"><strong>Owner:</strong> ${escapeHtml(j.owner||'Unassigned')} &middot; <strong>Deadline:</strong> ${escapeHtml(j.deadline||'Not set')}</div>
+          <div class="help" style="margin:8px 0 0;"><strong>Order date:</strong> ${escapeHtml(j.orderDate||todayStrFromDate(new Date(j.createdAt||Date.now())))} &middot; <strong>Owner:</strong> ${escapeHtml(j.owner||'Unassigned')}</div>
+          <div class="help" style="margin:3px 0 0;"><strong>Deadline:</strong> ${escapeHtml(j.deadline||'Not set')}</div>
           <div class="help" style="margin:3px 0 0;"><strong>Attribution:</strong> ${escapeHtml(j.delayType||'None')} &middot; <strong>Next:</strong> ${escapeHtml(j.action||'No action recorded')}</div>
           <div class="help" style="margin:3px 0 8px;"><strong>Contribution:</strong> ${money(margin)} &middot; updated ${escapeHtml((j.updatedAt||'').replace('T',' ').slice(0,16))}</div>
           <div style="display:flex;gap:7px;flex-wrap:wrap;">
@@ -2874,7 +2894,7 @@
       if(!ref || !owner){ msg.style.color='var(--red)'; msg.textContent='MAWB/job reference and accountable owner are required.'; return; }
       if(jobs.some(j=>j.ref.toLowerCase()===ref.toLowerCase() && j.stage!=='Cancelled')){ msg.style.color='var(--red)'; msg.textContent='This active MAWB/job reference already exists.'; return; }
       this.disabled=true; this.textContent='Creating…';
-      jobs.push({id:uid(),ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,stage:document.getElementById('ct-stage').value,owner,deadline:document.getElementById('ct-deadline').value,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),revenue:Number(document.getElementById('ct-revenue').value)||0,directCost:Number(document.getElementById('ct-cost').value)||0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+      jobs.push({id:uid(),ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,stage:document.getElementById('ct-stage').value,orderDate:document.getElementById('ct-order-date').value||todayStr(),owner,deadline:document.getElementById('ct-deadline').value||defaultDeadline,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),revenue:Number(document.getElementById('ct-revenue').value)||0,directCost:Number(document.getElementById('ct-cost').value)||0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
       await setList(K_JOBS,jobs); renderControlTower();
     };
     document.querySelectorAll('[data-ct-save]').forEach(btn=>{
