@@ -2808,15 +2808,16 @@
   // the logistics record that every future KPI should trace back to.
   async function renderControlTower(){
     const el = document.getElementById('view-controltower');
-    const jobs = await getJobs();
-    const active = jobs.filter(j=>j.stage!=='Billed' && j.stage!=='Cancelled');
+    const [jobs, workers, targets] = await Promise.all([getJobs(), getWorkers(), getTargets()]);
+    const stages = ['Pre-alert','Plan','Declare','Screen','Deliver','Short','Offload','Survey Report','Cancelled'];
+    const operationalStages = stages.filter(s=>s!=='Cancelled');
+    const stagePoints = {'Pre-alert':10,Plan:10,Declare:20,Screen:20,Deliver:20,Short:15,Offload:15,'Survey Report':20};
+    const active = jobs.filter(j=>j.stage!=='Survey Report' && j.stage!=='Cancelled');
     const critical = active.filter(j=>j.risk==='Red' || j.risk==='Black');
     const external = active.filter(j=>j.delayType==='External');
     const contribution = jobs.reduce((s,j)=>s+(Number(j.revenue)||0)-(Number(j.directCost)||0),0);
     const money = n=>'RM '+Number(n||0).toLocaleString('en-MY',{minimumFractionDigits:2,maximumFractionDigits:2});
     const riskColor = {Green:'var(--green)',Amber:'var(--amber-dark)',Red:'var(--red)',Black:'var(--ink)'};
-    const stages = ['Pre-alert','Plan','Declare','Screen','Pull-out','Deliver','Billed','Cancelled'];
-    const operationalStages = stages.filter(s=>s!=='Cancelled');
     const stageIndex = Object.fromEntries(stages.map((s,i)=>[s,i]));
     const sortedJobs = jobs.slice().sort((a,b)=>{
       const stageDiff=(stageIndex[a.stage]??99)-(stageIndex[b.stage]??99);
@@ -2824,6 +2825,16 @@
       return (a.deadline||'9999').localeCompare(b.deadline||'9999') || (a.orderDate||'').localeCompare(b.orderDate||'');
     });
     const defaultDeadline = todayStr() + 'T23:59';
+    const missionForJob = jobId => targets.filter(t=>t.jobId===jobId).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0];
+    const ensureJobMission = (job, list) => {
+      if(!job.ownerId) return;
+      let mission=list.find(t=>t.jobId===job.id && t.status==='active');
+      const title=`MAWB ${job.ref} — ${job.stage}`;
+      if(mission){ mission.workerId=job.ownerId; mission.title=title; mission.points=stagePoints[job.stage]||10; mission.stage=job.stage; }
+      else if(!list.some(t=>t.jobId===job.id && t.stage===job.stage)){
+        list.push({id:uid(),workerId:job.ownerId,title,points:stagePoints[job.stage]||10,period:'MAWB Mission',status:'active',createdAt:todayStr(),jobId:job.id,jobRef:job.ref,stage:job.stage,requiresPhoto:true});
+      }
+    };
 
     el.innerHTML = `
       <div class="toprow"><div><h2>Shipment Control Tower</h2><div class="help" style="margin:2px 0 0;">One owner, deadline, exception and next action for every MAWB/job.</div></div></div>
@@ -2835,11 +2846,15 @@
       </div>
       <div class="card" style="padding:12px 14px;">
         <div class="eyebrow">Process status</div>
+        <div class="help" style="margin-bottom:8px;">Click any status to show the MAWBs still pending at that stage.</div>
         <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;">
-          ${operationalStages.map((s,i)=>`<div style="min-width:86px;flex:1;padding:8px 7px;border-radius:8px;background:${jobs.some(j=>j.stage===s)?'#FFF6E8':'var(--paper)'};border:1px solid ${jobs.some(j=>j.stage===s)?'var(--amber)':'var(--line)'};text-align:center;">
+          <button type="button" data-ct-filter="all" style="min-width:86px;flex:1;padding:8px 7px;border-radius:8px;background:var(--ink);color:#fff;border:1px solid var(--ink);text-align:center;cursor:pointer;">
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;">All pending</div><div style="font-family:'IBM Plex Mono',monospace;font-size:16px;font-weight:700;color:var(--amber);margin-top:3px;">${active.length}</div>
+          </button>
+          ${operationalStages.map((s,i)=>`<button type="button" data-ct-filter="${s}" style="min-width:86px;flex:1;padding:8px 7px;border-radius:8px;background:${jobs.some(j=>j.stage===s)?'#FFF6E8':'var(--paper)'};border:1px solid ${jobs.some(j=>j.stage===s)?'var(--amber)':'var(--line)'};text-align:center;cursor:pointer;color:var(--text);">
             <div style="font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;">${i+1}. ${s}</div>
             <div style="font-family:'IBM Plex Mono',monospace;font-size:16px;font-weight:700;color:var(--amber-dark);margin-top:3px;">${jobs.filter(j=>j.stage===s).length}</div>
-          </div>`).join('')}
+          </button>`).join('')}
         </div>
       </div>
       <div class="card">
@@ -2856,7 +2871,8 @@
           <div class="field"><label>Order date</label><input type="date" id="ct-order-date" value="${todayStr()}"></div>
           <div class="field"><label>Deadline</label><input type="datetime-local" id="ct-deadline" value="${defaultDeadline}"></div>
         </div>
-        <div class="field"><label>Accountable owner</label><input id="ct-owner" placeholder="Name / department"></div>
+        <div class="field"><label>Assigned employee / KPI owner</label><select id="ct-owner"><option value="">— Select employee —</option>${workers.map(w=>`<option value="${w.id}">${escapeHtml(w.name)} — ${escapeHtml(w.role||'No role')}</option>`).join('')}</select></div>
+        ${workers.length===0?'<div class="help" style="color:var(--red);">No employees found. Add the employee under Workers first, then return here to assign the MAWB mission.</div>':''}
         <div class="row2">
           <div class="field"><label>Risk</label><select id="ct-risk"><option>Green</option><option>Amber</option><option>Red</option><option>Black</option></select></div>
           <div class="field"><label>Delay attribution</label><select id="ct-delay"><option>None</option><option>Internal</option><option>External</option></select></div>
@@ -2873,11 +2889,13 @@
       <div id="ct-list">${jobs.length ? sortedJobs.map((j,index)=>{
         const margin=(Number(j.revenue)||0)-(Number(j.directCost)||0);
         const showStageHeader=index===0 || sortedJobs[index-1].stage!==j.stage;
-        return `${showStageHeader?`<div class="eyebrow" style="margin:18px 2px 8px;">${(stageIndex[j.stage]??0)+1}. ${escapeHtml(j.stage)} &middot; ${jobs.filter(x=>x.stage===j.stage).length} job(s)</div>`:''}<div class="card" style="margin-bottom:10px;border-left:5px solid ${riskColor[j.risk]||'var(--line)'};">
+        const mission=missionForJob(j.id);
+        return `${showStageHeader?`<div class="eyebrow ct-stage-header" data-ct-stage-header="${escapeHtml(j.stage)}" style="margin:18px 2px 8px;">${(stageIndex[j.stage]??0)+1}. ${escapeHtml(j.stage)} &middot; ${jobs.filter(x=>x.stage===j.stage).length} job(s)</div>`:''}<div class="card ct-job-card" data-ct-job-stage="${escapeHtml(j.stage)}" style="margin-bottom:10px;border-left:5px solid ${riskColor[j.risk]||'var(--line)'};">
           <div class="worker-head"><div><div class="worker-name">${escapeHtml(j.ref)}</div><div class="worker-role">${escapeHtml(j.customer||'—')} &middot; ${escapeHtml(j.service||'—')}</div></div><div class="target-pts">${escapeHtml(j.stage)}</div></div>
           <div class="help" style="margin:8px 0 0;"><strong>Order date:</strong> ${escapeHtml(j.orderDate||todayStrFromDate(new Date(j.createdAt||Date.now())))} &middot; <strong>Owner:</strong> ${escapeHtml(j.owner||'Unassigned')}</div>
           <div class="help" style="margin:3px 0 0;"><strong>Deadline:</strong> ${escapeHtml(j.deadline||'Not set')}</div>
           <div class="help" style="margin:3px 0 0;"><strong>Attribution:</strong> ${escapeHtml(j.delayType||'None')} &middot; <strong>Next:</strong> ${escapeHtml(j.action||'No action recorded')}</div>
+          <div class="help" style="margin:3px 0 0;"><strong>KPI mission:</strong> ${mission?escapeHtml(mission.status)+' · '+mission.points+' pts':'Not linked'}${mission&&mission.workerId?` &middot; ${escapeHtml((workers.find(w=>w.id===mission.workerId)||{}).name||'Unknown employee')}`:''}</div>
           <div class="help" style="margin:3px 0 8px;"><strong>Contribution:</strong> ${money(margin)} &middot; updated ${escapeHtml((j.updatedAt||'').replace('T',' ').slice(0,16))}</div>
           <div style="display:flex;gap:7px;flex-wrap:wrap;">
             <select data-ct-stage="${j.id}" style="padding:6px;border:1px solid var(--line);border-radius:7px;">${stages.map(s=>`<option ${s===j.stage?'selected':''}>${s}</option>`).join('')}</select>
@@ -2889,20 +2907,33 @@
 
     document.getElementById('ct-add').onclick = async function(){
       const ref=document.getElementById('ct-ref').value.trim();
-      const owner=document.getElementById('ct-owner').value.trim();
+      const ownerId=document.getElementById('ct-owner').value;
+      const ownerWorker=workers.find(w=>w.id===ownerId);
+      const owner=ownerWorker?ownerWorker.name:'';
       const msg=document.getElementById('ct-msg');
       if(!ref || !owner){ msg.style.color='var(--red)'; msg.textContent='MAWB/job reference and accountable owner are required.'; return; }
       if(jobs.some(j=>j.ref.toLowerCase()===ref.toLowerCase() && j.stage!=='Cancelled')){ msg.style.color='var(--red)'; msg.textContent='This active MAWB/job reference already exists.'; return; }
       this.disabled=true; this.textContent='Creating…';
-      jobs.push({id:uid(),ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,stage:document.getElementById('ct-stage').value,orderDate:document.getElementById('ct-order-date').value||todayStr(),owner,deadline:document.getElementById('ct-deadline').value||defaultDeadline,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),revenue:Number(document.getElementById('ct-revenue').value)||0,directCost:Number(document.getElementById('ct-cost').value)||0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
-      await setList(K_JOBS,jobs); renderControlTower();
+      const job={id:uid(),ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,stage:document.getElementById('ct-stage').value,orderDate:document.getElementById('ct-order-date').value||todayStr(),ownerId,owner,ownerRole:ownerWorker?ownerWorker.role:'',deadline:document.getElementById('ct-deadline').value||defaultDeadline,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),revenue:Number(document.getElementById('ct-revenue').value)||0,directCost:Number(document.getElementById('ct-cost').value)||0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+      jobs.push(job); ensureJobMission(job,targets);
+      await Promise.all([setList(K_JOBS,jobs),setList(K_TARGETS,targets)]); renderControlTower();
     };
     document.querySelectorAll('[data-ct-save]').forEach(btn=>{
       btn.onclick=async()=>{
         const all=await getJobs(); const job=all.find(j=>j.id===btn.dataset.ctSave); if(!job) return;
         job.stage=document.querySelector(`[data-ct-stage="${job.id}"]`).value;
         job.risk=document.querySelector(`[data-ct-risk="${job.id}"]`).value;
-        job.updatedAt=new Date().toISOString(); await setList(K_JOBS,all); renderControlTower();
+        job.updatedAt=new Date().toISOString();
+        const allTargets=await getTargets(); ensureJobMission(job,allTargets);
+        await Promise.all([setList(K_JOBS,all),setList(K_TARGETS,allTargets)]); renderControlTower();
+      };
+    });
+    document.querySelectorAll('[data-ct-filter]').forEach(btn=>{
+      btn.onclick=()=>{
+        const filter=btn.dataset.ctFilter;
+        document.querySelectorAll('[data-ct-filter]').forEach(b=>{ b.style.outline=b===btn?'3px solid var(--amber)':'none'; });
+        document.querySelectorAll('.ct-job-card').forEach(card=>{ card.style.display=filter==='all'||card.dataset.ctJobStage===filter?'block':'none'; });
+        document.querySelectorAll('.ct-stage-header').forEach(header=>{ header.style.display=filter==='all'||header.dataset.ctStageHeader===filter?'block':'none'; });
       };
     });
   }
