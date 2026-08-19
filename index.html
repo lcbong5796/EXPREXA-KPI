@@ -2890,18 +2890,24 @@
         const margin=(Number(j.revenue)||0)-(Number(j.directCost)||0);
         const showStageHeader=index===0 || sortedJobs[index-1].stage!==j.stage;
         const mission=missionForJob(j.id);
-        return `${showStageHeader?`<div class="eyebrow ct-stage-header" data-ct-stage-header="${escapeHtml(j.stage)}" style="margin:18px 2px 8px;">${(stageIndex[j.stage]??0)+1}. ${escapeHtml(j.stage)} &middot; ${jobs.filter(x=>x.stage===j.stage).length} job(s)</div>`:''}<div class="card ct-job-card" data-ct-job-stage="${escapeHtml(j.stage)}" style="margin-bottom:10px;border-left:5px solid ${riskColor[j.risk]||'var(--line)'};">
-          <div class="worker-head"><div><div class="worker-name">${escapeHtml(j.ref)}</div><div class="worker-role">${escapeHtml(j.customer||'—')} &middot; ${escapeHtml(j.service||'—')}</div></div><div class="target-pts">${escapeHtml(j.stage)}</div></div>
-          <div class="help" style="margin:8px 0 0;"><strong>Order date:</strong> ${escapeHtml(j.orderDate||todayStrFromDate(new Date(j.createdAt||Date.now())))} &middot; <strong>Owner:</strong> ${escapeHtml(j.owner||'Unassigned')}</div>
-          <div class="help" style="margin:3px 0 0;"><strong>Deadline:</strong> ${escapeHtml(j.deadline||'Not set')}</div>
-          <div class="help" style="margin:3px 0 0;"><strong>Attribution:</strong> ${escapeHtml(j.delayType||'None')} &middot; <strong>Next:</strong> ${escapeHtml(j.action||'No action recorded')}</div>
-          <div class="help" style="margin:3px 0 0;"><strong>KPI mission:</strong> ${mission?escapeHtml(mission.status)+' · '+mission.points+' pts':'Not linked'}${mission&&mission.workerId?` &middot; ${escapeHtml((workers.find(w=>w.id===mission.workerId)||{}).name||'Unknown employee')}`:''}</div>
-          <div class="help" style="margin:3px 0 8px;"><strong>Contribution:</strong> ${money(margin)} &middot; updated ${escapeHtml((j.updatedAt||'').replace('T',' ').slice(0,16))}</div>
-          <div style="display:flex;gap:7px;flex-wrap:wrap;">
-            <select data-ct-stage="${j.id}" style="padding:6px;border:1px solid var(--line);border-radius:7px;">${stages.map(s=>`<option ${s===j.stage?'selected':''}>${s}</option>`).join('')}</select>
-            <select data-ct-risk="${j.id}" style="padding:6px;border:1px solid var(--line);border-radius:7px;">${['Green','Amber','Red','Black'].map(s=>`<option ${s===j.risk?'selected':''}>${s}</option>`).join('')}</select>
-            <button class="btn btn-ghost btn-sm" data-ct-save="${j.id}">Update</button>
+        return `${showStageHeader?`<div class="eyebrow ct-stage-header" data-ct-stage-header="${escapeHtml(j.stage)}" style="margin:14px 2px 6px;">${(stageIndex[j.stage]??0)+1}. ${escapeHtml(j.stage)} &middot; ${jobs.filter(x=>x.stage===j.stage).length}</div>`:''}<div class="card ct-job-card" data-ct-job-stage="${escapeHtml(j.stage)}" style="margin-bottom:7px;padding:11px 12px;border-left:4px solid ${riskColor[j.risk]||'var(--line)'};">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div style="min-width:0;"><div class="worker-name" style="font-size:14px;">${escapeHtml(j.ref)}</div><div class="worker-role" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:360px;">${escapeHtml(j.customer||'—')} &middot; ${escapeHtml(j.service||'—')}</div></div>
+            <div style="display:flex;gap:5px;align-items:center;"><span class="badge badge-pending">${escapeHtml(j.stage)}</span><span style="width:9px;height:9px;border-radius:50%;background:${riskColor[j.risk]||'var(--line)'};" title="${escapeHtml(j.risk||'Green')} risk"></span></div>
           </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px;">
+            <span>📅 ${escapeHtml(j.orderDate||todayStrFromDate(new Date(j.createdAt||Date.now())))}</span><span>👤 ${escapeHtml(j.owner||'Unassigned')}</span><span>⏱ ${escapeHtml((j.deadline||'Not set').replace('T',' '))}</span><span>🎯 ${mission?escapeHtml(mission.status)+' '+mission.points+'pts':'Not linked'}</span>
+          </div>
+          <details style="margin-top:6px;"><summary style="font-size:11px;color:var(--muted);cursor:pointer;">More details</summary>
+            <div class="help" style="margin:6px 0 0;font-size:11px;"><strong>Attribution:</strong> ${escapeHtml(j.delayType||'None')} &middot; <strong>Next:</strong> ${escapeHtml(j.action||'No action recorded')}<br><strong>Contribution:</strong> ${money(margin)} &middot; <strong>Last proof:</strong> ${j.lastStatusProofAt?escapeHtml(j.lastStatusProofAt.replace('T',' ').slice(0,16)):'None'}</div>
+          </details>
+          <div style="display:grid;grid-template-columns:minmax(105px,1fr) 82px minmax(125px,1.25fr) auto;gap:6px;align-items:center;margin-top:8px;">
+            <select data-ct-stage="${j.id}" style="min-width:0;padding:6px;font-size:11px;border:1px solid var(--line);border-radius:7px;">${stages.map(s=>`<option ${s===j.stage?'selected':''}>${s}</option>`).join('')}</select>
+            <select data-ct-risk="${j.id}" style="min-width:0;padding:6px;font-size:11px;border:1px solid var(--line);border-radius:7px;">${['Green','Amber','Red','Black'].map(s=>`<option ${s===j.risk?'selected':''}>${s}</option>`).join('')}</select>
+            <input type="file" accept="image/*" capture="environment" data-ct-proof="${j.id}" title="Proof photo required when changing status" style="min-width:0;width:100%;font-size:10px;">
+            <button class="btn btn-primary btn-sm" data-ct-save="${j.id}" style="width:auto;padding:7px 10px;">Update</button>
+          </div>
+          <div data-ct-update-msg="${j.id}" style="font-size:10.5px;margin-top:5px;color:var(--muted);">Photo required only when changing process status.</div>
         </div>`;
       }).join('') : '<div class="card"><div class="empty">No MAWB/jobs recorded yet.</div></div>'}</div>`;
 
@@ -2921,8 +2927,27 @@
     document.querySelectorAll('[data-ct-save]').forEach(btn=>{
       btn.onclick=async()=>{
         const all=await getJobs(); const job=all.find(j=>j.id===btn.dataset.ctSave); if(!job) return;
-        job.stage=document.querySelector(`[data-ct-stage="${job.id}"]`).value;
-        job.risk=document.querySelector(`[data-ct-risk="${job.id}"]`).value;
+        const newStage=document.querySelector(`[data-ct-stage="${job.id}"]`).value;
+        const newRisk=document.querySelector(`[data-ct-risk="${job.id}"]`).value;
+        const proofInput=document.querySelector(`[data-ct-proof="${job.id}"]`);
+        const msg=document.querySelector(`[data-ct-update-msg="${job.id}"]`);
+        const statusChanged=newStage!==job.stage;
+        if(statusChanged && (!proofInput || !proofInput.files || !proofInput.files[0])){
+          msg.style.color='var(--red)'; msg.textContent='Upload a proof photo before changing status.'; proofInput.focus(); return;
+        }
+        btn.disabled=true; btn.textContent=statusChanged?'Saving proof…':'Updating…';
+        const oldStage=job.stage;
+        if(statusChanged){
+          const photo=await compressImage(proofInput.files[0],1200,0.72);
+          const proofId=uid();
+          const ok=await addSub({id:proofId,targetId:null,jobId:job.id,jobRef:job.ref,workerId:job.ownerId||'',photo,note:`Status proof: ${oldStage} → ${newStage}`,type:'status-proof',status:'approved',submittedAt:new Date().toISOString(),reviewedAt:new Date().toISOString()});
+          if(!ok){ btn.disabled=false; btn.textContent='Update'; msg.style.color='var(--red)'; msg.textContent='Could not save proof photo. Status was not changed.'; return; }
+          job.lastStatusProofId=proofId; job.lastStatusProofAt=new Date().toISOString();
+          job.statusHistory=job.statusHistory||[];
+          job.statusHistory.push({from:oldStage,to:newStage,proofId,changedAt:job.lastStatusProofAt});
+        }
+        job.stage=newStage;
+        job.risk=newRisk;
         job.updatedAt=new Date().toISOString();
         const allTargets=await getTargets(); ensureJobMission(job,allTargets);
         await Promise.all([setList(K_JOBS,all),setList(K_TARGETS,allTargets)]); renderControlTower();
