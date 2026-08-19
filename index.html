@@ -2888,8 +2888,8 @@
     const active = jobs.filter(j=>j.stage!=='Survey Report' && j.stage!=='Cancelled');
     const critical = active.filter(j=>j.risk==='Red' || j.risk==='Black');
     const external = active.filter(j=>j.delayType==='External');
-    const contribution = jobs.reduce((s,j)=>s+(Number(j.revenue)||0)-(Number(j.directCost)||0),0);
-    const money = n=>'RM '+Number(n||0).toLocaleString('en-MY',{minimumFractionDigits:2,maximumFractionDigits:2});
+    const pointsForJob = job => Math.round((Number(job.basePoints)||stagePoints[job.stage]||10)*(Number(job.difficultyMultiplier)||1)+(job.stage==='Survey Report'?(Number(job.completionBonus)||0):0)+(job.stage==='Survey Report'&&job.orderDate===todayStr()?(Number(job.sameDayBonus)||0):0));
+    const pointsInPlay=active.reduce((sum,j)=>sum+pointsForJob(j)*Math.max(1,(j.handlerIds||[j.ownerId]).filter(Boolean).length),0);
     const riskColor = {Green:'var(--green)',Amber:'var(--amber-dark)',Red:'var(--red)',Black:'var(--ink)'};
     const stageIndex = Object.fromEntries(stages.map((s,i)=>[s,i]));
     const sortedJobs = jobs.slice().sort((a,b)=>{
@@ -2904,8 +2904,8 @@
       const title=`MAWB ${job.ref} — ${job.stage}`;
       handlerIds.forEach(workerId=>{
         let mission=list.find(t=>t.jobId===job.id&&t.workerId===workerId&&t.status==='active');
-        if(mission){ mission.title=title; mission.points=stagePoints[job.stage]||10; mission.stage=job.stage; }
-        else if(!list.some(t=>t.jobId===job.id&&t.workerId===workerId&&t.stage===job.stage)) list.push({id:uid(),workerId,title,points:stagePoints[job.stage]||10,period:'MAWB Mission',status:'active',createdAt:todayStr(),jobId:job.id,jobRef:job.ref,stage:job.stage,requiresPhoto:true});
+        if(mission){ mission.title=title; mission.points=pointsForJob(job); mission.stage=job.stage; }
+        else if(!list.some(t=>t.jobId===job.id&&t.workerId===workerId&&t.stage===job.stage)) list.push({id:uid(),workerId,title,points:pointsForJob(job),period:'MAWB Mission',status:'active',createdAt:todayStr(),jobId:job.id,jobRef:job.ref,stage:job.stage,requiresPhoto:true});
       });
     };
 
@@ -2915,7 +2915,7 @@
         <div class="stat"><div class="n">${active.length}</div><div class="l">Active jobs</div></div>
         <div class="stat"><div class="n" style="color:var(--red);">${critical.length}</div><div class="l">Red / black</div></div>
         <div class="stat"><div class="n">${external.length}</div><div class="l">External pending</div></div>
-        <div class="stat"><div class="n" style="font-size:18px;">${money(contribution)}</div><div class="l">Recorded contribution</div></div>
+        <div class="stat"><div class="n" style="font-size:18px;">${pointsInPlay}</div><div class="l">Points in play</div></div>
       </div>
       <div class="card" style="padding:12px 14px;">
         <div class="eyebrow">Process status</div>
@@ -2953,15 +2953,18 @@
         </div>
         <div class="field"><label>Exception / next action</label><input id="ct-action" placeholder="What happened, next action and escalation"></div>
         <div class="row2">
-          <div class="field"><label>Revenue (RM)</label><input type="number" step="0.01" id="ct-revenue" value="0"></div>
-          <div class="field"><label>Direct job cost (RM)</label><input type="number" step="0.01" id="ct-cost" value="0"></div>
+          <div class="field"><label>Mission base points</label><input type="number" id="ct-base-points" value="20" min="1"></div>
+          <div class="field"><label>Difficulty</label><select id="ct-difficulty"><option value="1">Normal ×1.0</option><option value="1.25">Urgent ×1.25</option><option value="1.5">Critical ×1.5</option></select></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Full-chain bonus</label><input type="number" id="ct-completion-bonus" value="10" min="0"></div>
+          <div class="field"><label>Same-day clear bonus</label><input type="number" id="ct-sameday-bonus" value="5" min="0"></div>
         </div>
         <button class="btn btn-primary btn-block" id="ct-add">Create accountable job</button>
         <div id="ct-msg" style="margin-top:8px;font-size:12px;"></div>
       </div>
       <div class="toprow"><h2>Live jobs</h2></div>
       <div id="ct-list">${jobs.length ? sortedJobs.map((j,index)=>{
-        const margin=(Number(j.revenue)||0)-(Number(j.directCost)||0);
         const showStageHeader=index===0 || sortedJobs[index-1].stage!==j.stage;
         const mission=missionForJob(j.id);
         return `${showStageHeader?`<div class="eyebrow ct-stage-header" data-ct-stage-header="${escapeHtml(j.stage)}" style="margin:14px 2px 6px;">${(stageIndex[j.stage]??0)+1}. ${escapeHtml(j.stage)} &middot; ${jobs.filter(x=>x.stage===j.stage).length}</div>`:''}<div class="card ct-job-card" data-ct-job-stage="${escapeHtml(j.stage)}" style="margin-bottom:7px;padding:11px 12px;border-left:4px solid ${riskColor[j.risk]||'var(--line)'};">
@@ -2973,7 +2976,7 @@
             <span>📅 ${escapeHtml(j.orderDate||todayStrFromDate(new Date(j.createdAt||Date.now())))}</span><span>👥 ${escapeHtml((j.handlerNames&&j.handlerNames.length?j.handlerNames:[j.owner||'Unassigned']).join(', '))}</span><span>⏱ ${escapeHtml((j.deadline||'Not set').replace('T',' '))}</span><span>🎯 ${mission?escapeHtml(mission.status)+' '+mission.points+'pts':'Not linked'}</span>
           </div>
           <details style="margin-top:6px;"><summary style="font-size:11px;color:var(--muted);cursor:pointer;">More details</summary>
-            <div class="help" style="margin:6px 0 0;font-size:11px;"><strong>Attribution:</strong> ${escapeHtml(j.delayType||'None')} &middot; <strong>Next:</strong> ${escapeHtml(j.action||'No action recorded')}<br><strong>Contribution:</strong> ${money(margin)} &middot; <strong>Last proof:</strong> ${j.lastStatusProofAt?escapeHtml(j.lastStatusProofAt.replace('T',' ').slice(0,16)):'None'}</div>
+            <div class="help" style="margin:6px 0 0;font-size:11px;"><strong>Attribution:</strong> ${escapeHtml(j.delayType||'None')} &middot; <strong>Next:</strong> ${escapeHtml(j.action||'No action recorded')}<br><strong>Mission value:</strong> ${pointsForJob(j)} pts per handler &middot; <strong>Last proof:</strong> ${j.lastStatusProofAt?escapeHtml(j.lastStatusProofAt.replace('T',' ').slice(0,16)):'None'}</div>
           </details>
           <div style="display:grid;grid-template-columns:minmax(105px,1fr) 82px minmax(125px,1.25fr) auto;gap:6px;align-items:center;margin-top:8px;">
             <select data-ct-stage="${j.id}" style="min-width:0;padding:6px;font-size:11px;border:1px solid var(--line);border-radius:7px;">${stages.map(s=>`<option ${s===j.stage?'selected':''}>${s}</option>`).join('')}</select>
@@ -2997,7 +3000,7 @@
       if(!ref || !owner){ msg.style.color='var(--red)'; msg.textContent='MAWB/job reference and accountable owner are required.'; return; }
       if(jobs.some(j=>j.ref.toLowerCase()===ref.toLowerCase() && j.stage!=='Cancelled')){ msg.style.color='var(--red)'; msg.textContent='This active MAWB/job reference already exists.'; return; }
       this.disabled=true; this.textContent='Creating…';
-      const job={id:uid(),ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,stage:document.getElementById('ct-stage').value,orderDate:document.getElementById('ct-order-date').value||todayStr(),ownerId,owner,ownerRole:ownerWorker?ownerWorker.role:'',handlerIds,handlerNames,deadline:document.getElementById('ct-deadline').value||defaultDeadline,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),revenue:Number(document.getElementById('ct-revenue').value)||0,directCost:Number(document.getElementById('ct-cost').value)||0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+      const job={id:uid(),ref,customer:document.getElementById('ct-customer').value.trim(),service:document.getElementById('ct-service').value,stage:document.getElementById('ct-stage').value,orderDate:document.getElementById('ct-order-date').value||todayStr(),ownerId,owner,ownerRole:ownerWorker?ownerWorker.role:'',handlerIds,handlerNames,deadline:document.getElementById('ct-deadline').value||defaultDeadline,risk:document.getElementById('ct-risk').value,delayType:document.getElementById('ct-delay').value,action:document.getElementById('ct-action').value.trim(),basePoints:Number(document.getElementById('ct-base-points').value)||20,difficultyMultiplier:Number(document.getElementById('ct-difficulty').value)||1,completionBonus:Number(document.getElementById('ct-completion-bonus').value)||0,sameDayBonus:Number(document.getElementById('ct-sameday-bonus').value)||0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
       jobs.push(job); ensureJobMissions(job,targets);
       await Promise.all([setList(K_JOBS,jobs),setList(K_TARGETS,targets),addAuditLog({event:'MAWB_CREATED',jobId:job.id,jobRef:ref,detail:`Stage ${job.stage}; handlers ${handlerNames.join(', ')}`})]); renderControlTower();
     };
@@ -3049,7 +3052,14 @@
       <div class="card"><h3>Position scorecard — 100%</h3>${rows.map(r=>`<div class="ledger-row"><div><div class="ledger-note">${r[0]}</div><div class="ledger-date">${r[2]}</div></div><div class="target-pts">${r[1]}</div></div>`).join('')}</div>
       <div class="card"><h3>Bonus engine</h3><div class="help" style="font-size:13px;line-height:1.65;"><strong>Earned incentive = Approved pool × KPI factor (0–120%) × Company factor × Compliance factor</strong><br><br>Company factor requires the approved gross-profit and cash-collection threshold. A serious customs or safety breach freezes payout. Falsified evidence gives zero and triggers investigation. Properly evidenced AKPS, Customs, airline, terminal, weather or customer delay remains visible as “External Pending” but does not reduce the employee score.</div></div>
       <div class="card"><h3>Source-of-truth rule</h3><div class="help" style="font-size:13px;line-height:1.65;">Every score must drill down to <strong>MAWB/job → stage/task → assigned employee → timestamp → evidence → reviewer decision → points/penalty</strong>. Generic daily check-boxes may support behaviour measurement, but must not replace operational transactions.</div></div>
-      <div class="card"><h3>Department views</h3><div class="help" style="font-size:13px;line-height:1.65;">Airport & Forwarding: declare, screen, pull-out, cut-off, document accuracy. Warehouse: receive, locate, release, variance, damage and turnaround. Fleet: allocation, departure, POD, fuel and utilisation. Customer Service: proactive update, SLA and resolution. Finance: billing within 24 hours, unbilled jobs, collection and contribution margin.</div></div>`;
+      <div class="card"><h3>MAWB game rules</h3>
+        <div class="ledger-row"><div><div class="ledger-note">🎯 Mission points</div><div class="ledger-date">Earned only after task proof is approved.</div></div></div>
+        <div class="ledger-row"><div><div class="ledger-note">⚡ Difficulty multiplier</div><div class="ledger-date">Normal ×1.0 · Urgent ×1.25 · Critical ×1.5.</div></div></div>
+        <div class="ledger-row"><div><div class="ledger-note">🏁 Full-chain bonus</div><div class="ledger-date">Unlocks only when the MAWB reaches Survey Report.</div></div></div>
+        <div class="ledger-row"><div><div class="ledger-note">🔥 Same-day clear bonus</div><div class="ledger-date">Extra points when the full chain closes on its order date.</div></div></div>
+        <div class="ledger-row"><div><div class="ledger-note">🛡 Quality gate</div><div class="ledger-date">No proof, rejected proof or preventable error means no points.</div></div></div>
+      </div>
+      <div class="card"><h3>Department views</h3><div class="help" style="font-size:13px;line-height:1.65;">Airport & Forwarding: declare, screen, delivery, short/offload handling and survey-report completion. Each department sees active missions, evidence status, points in play and employee ranking.</div></div>`;
   }
 
 })();
