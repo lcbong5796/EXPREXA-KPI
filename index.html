@@ -484,20 +484,6 @@
     catch(e){ showFbError('Could not delete proof: ' + e.message); return false; }
   }
 
-  // Requested reset: remove the trial MAWB records once, including their
-  // linked missions and proofs, while preserving employees and unrelated KPI data.
-  async function clearTrialJobsOnce(){
-    const resetDoc=db.collection('appdata').doc('exprexa-live-jobs-reset-20260819');
-    try{
-      const done=await resetDoc.get(); if(done.exists) return;
-      const [jobs,targets,subs]=await Promise.all([getJobs(),getTargets(),getSubs()]);
-      const jobIds=new Set(jobs.map(j=>j.id));
-      await Promise.all(subs.filter(s=>jobIds.has(s.jobId)).map(s=>deleteSub(s.id)));
-      await Promise.all([setList(K_JOBS,[]),setList(K_TARGETS,targets.filter(t=>!jobIds.has(t.jobId))),resetDoc.set({completed:true,at:new Date().toISOString(),deletedJobs:jobs.length})]);
-      await addAuditLog({event:'TRIAL_JOBS_CLEARED',detail:`${jobs.length} trial live job(s) removed`});
-    }catch(e){ console.error('Trial job reset failed:',e); }
-  }
-
   async function getWorkers(){ return getList(K_WORKERS); }
   async function getTargets(){ return getList(K_TARGETS); }
   async function getLedger(){ return getList(K_LEDGER); }
@@ -1537,7 +1523,6 @@
       return;
     }
 
-    await clearTrialJobsOnce();
     await generateDailyTargets();
     root.innerHTML = `
       <div class="app">
@@ -3007,7 +2992,7 @@
             <button class="btn btn-primary btn-sm" data-ct-save="${j.id}" style="width:auto;padding:7px 10px;">Update</button>
           </div>
           <div data-ct-update-msg="${j.id}" style="font-size:10.5px;margin-top:5px;color:var(--muted);">Photo required only when changing process status.</div>
-          <div style="display:flex;gap:6px;margin-top:7px;"><button type="button" class="btn btn-ghost btn-sm" data-ct-edit="${j.id}" style="flex:1;">Edit job details</button><button type="button" class="btn btn-red btn-sm" data-ct-delete="${j.id}" style="flex:1;">Delete job</button></div>
+          <div style="display:flex;gap:6px;margin-top:7px;"><button type="button" class="btn btn-ghost btn-sm" data-ct-edit="${j.id}" style="flex:1;">Edit job details</button><button type="button" class="btn btn-red btn-sm" data-ct-delete="${j.id}" style="flex:1;">Remove from MAWB list</button></div>
         </div>`;
       }).join('') : '<div class="card"><div class="empty">No MAWB/jobs recorded yet.</div></div>'}</div>`;
 
@@ -3087,10 +3072,9 @@
       document.getElementById('ct-add').textContent='Save job changes'; const msg=document.getElementById('ct-msg'); msg.style.color='var(--amber-dark)'; msg.textContent='Editing '+job.ref+'. Process status remains controlled below with live-photo proof.'; document.querySelector('.card h3').scrollIntoView({behavior:'smooth'});
     }; });
     document.querySelectorAll('[data-ct-delete]').forEach(btn=>{ btn.onclick=async()=>{
-      const job=jobs.find(j=>j.id===btn.dataset.ctDelete); if(!job||!confirm(`Delete ${job.ref}? Linked MAWB missions and proof records will also be removed. This cannot be undone.`)) return;
-      btn.disabled=true; btn.textContent='Deleting…'; const [allJobs,allTargets,allSubs]=await Promise.all([getJobs(),getTargets(),getSubs()]);
-      await Promise.all(allSubs.filter(s=>s.jobId===job.id).map(s=>deleteSub(s.id)));
-      await Promise.all([setList(K_JOBS,allJobs.filter(j=>j.id!==job.id)),setList(K_TARGETS,allTargets.filter(t=>t.jobId!==job.id)),addAuditLog({event:'MAWB_DELETED',jobId:job.id,jobRef:job.ref,detail:'Job, linked missions and proofs removed'})]);
+      const job=jobs.find(j=>j.id===btn.dataset.ctDelete); if(!job||!confirm(`Remove ${job.ref} from the MAWB live list? Employees, KPI missions, proofs, points and logs will remain recorded.`)) return;
+      btn.disabled=true; btn.textContent='Removing…'; const allJobs=await getJobs();
+      await Promise.all([setList(K_JOBS,allJobs.filter(j=>j.id!==job.id)),addAuditLog({event:'MAWB_LIST_REMOVED',jobId:job.id,jobRef:job.ref,detail:'Removed from MAWB live list only; all KPI and proof records retained'})]);
       updateReviewDot(); renderControlTower();
     }; });
     document.querySelectorAll('[data-ct-camera]').forEach(btn=>{ btn.onclick=()=>openLiveCamera(btn.dataset.ctCamera); });
